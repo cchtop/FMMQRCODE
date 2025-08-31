@@ -28,19 +28,27 @@
           <label class="form-label">相機</label>
           <select id="camSelect" class="form-select" style="min-width:220px"></select>
         </div>
-        <button id="btnScanStart" class="btn btn-outline-primary">啟動掃描</button>
-        <button id="btnScanStop" class="btn btn-outline-secondary">停止</button>
-        <span id="scanMsg" class="text-danger small ms-2"></span>
+        <button id="btnPhotoScan" class="btn btn-outline-secondary btn-sm mt-2">拍照掃碼（備援）</button>
+        <span id="scanHint" class="text-muted small ms-2"></span>
       </div>
-      <video id="video" style="width:100%;max-width:380px;margin-top:.5rem;border:1px solid #ddd;border-radius:6px"></video>
+      <video id="video" playsinline muted style="width:100%;max-width:380px;margin-top:.5rem;border:1px solid #ddd;border-radius:6px"></video>
     </div>
   </div>
+<div class="card my-3">
+  <div class="card-header">批次上傳 Excel → 入庫</div>
+  <div class="card-body">
+    <input id="bulkFile" type="file" accept=".xlsx,.xls" class="form-control" />
+    <div class="form-text">欄位（第一列標題）：date, code, item, loc, in, out, stock, barcode（日期建議 YYYY-MM-DD）</div>
+    <button id="btnBulk" class="btn btn-outline-success mt-2" type="button">上傳入庫</button>
+    <small id="bulkMsg" class="text-muted ms-2"></small>
+  </div>
+</div>
 
   <!-- 輸入表單 -->
   <form id="matForm" class="row g-3 align-items-end">
     <div class="col-6 col-md-3">
       <label class="form-label">日期</label>
-      <input id="matDate" type="date" class="form-control" required />
+      <input id="fileScan" type="file" accept="image/*" capture="environment" class="d-none">
     </div>
     <div class="col-6 col-md-3">
       <label class="form-label">料號</label>
@@ -110,10 +118,31 @@
       </div>
     </div>
   </div>
+  <button id="btnSummary" class="btn btn-warning" type="button">彙總(同日×料號×品項×儲位)</button>
+document.getElementById('btnSummary').addEventListener('click', async ()=>{
+  const qs = new URLSearchParams({
+    action:'summary',
+    from: qFrom.value || '',
+    to:   qTo.value   || '',
+    code: qCode.value || '',
+    item: qItem.value || '',
+    loc:  qLoc.value  || ''
+  }).toString();
+  try{
+    const r = await fetch(`${GAS_URL}?${qs}`); const j = await r.json();
+    qBody.innerHTML='';
+    (j.rows||[]).forEach(r=>{
+      qBody.insertAdjacentHTML('beforeend', `<tr>
+        <td>${r.date||''}</td><td></td><td>${r.code||''}</td><td>${r.item||''}</td><td>${r.loc||''}</td>
+        <td>${r.in||0}</td><td>${r.out||0}</td><td>${r.stockEnd||0}</td><td></td>
+      </tr>`);
+    });
+  }catch(e){ alert('彙總失敗：'+e); }
+});
 
   <script>
   // === 你的 GAS Web App URL ===
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbx4656Lz-12jAy3ElkCUtKpTPtp56MfxUIL4-ReTTTRn_7arAS5SLefY-ZdlEMoJt3vBQ/exec';
+  const GAS_URL = 'https://script.google.com/macros/s/AKfycbz0jJaxYpwZoVJWRczr1HduKs_SFDaHfOSN4qvloGrK-o2yGpRoArwqjxX4X4JLWJzTAw/exec';
 
   // === 前端暫存資料（只用於本頁顯示，不是權威資料來源） ===
   let data = [];
@@ -124,6 +153,44 @@
   const camSel = document.getElementById('camSelect');
   const scanMsg = document.getElementById('scanMsg');
   const codeReader = new ZXing.BrowserMultiFormatReader();
+  const isLINE = /Line/i.test(navigator.userAgent);
+  if (isLINE) document.getElementById('scanHint').textContent = '提示：LINE 內建瀏覽器常擋鏡頭，請以右上角「在瀏覽器開啟」。';
+
+  async function ensureCamPermission(){
+      try{
+      const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
+      s.getTracks().forEach(t=>t.stop());
+      return true;
+      }catch(e){ return false; }
+    }
+
+document.getElementById('btnScanStart').addEventListener('click', async ()=>{
+  scanMsg.textContent='';
+  const ok = await ensureCamPermission();
+  if(!ok){ scanMsg.textContent='鏡頭權限被拒，請至瀏覽器網站權限允許相機，或改用「拍照掃碼」。'; return; }
+  if(!currentDeviceId) await listCams();
+  try{
+    await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result)=>{ if(result){ handleBarcode(result.getText()); stopScan(); } });
+  }catch(e){ scanMsg.textContent = '啟動失敗：'+e; }
+});
+
+function handleBarcode(text){
+  document.getElementById('matBarcode').value = text;
+  lookupByBarcode(text);
+}
+
+// 備援：拍照掃碼
+document.getElementById('btnPhotoScan').addEventListener('click', ()=> document.getElementById('fileScan').click());
+document.getElementById('fileScan').addEventListener('change', async (ev)=>{
+  const f = ev.target.files[0]; if(!f) return;
+  const url = URL.createObjectURL(f);
+  try{
+    const result = await new ZXing.BrowserMultiFormatReader().decodeFromImageUrl(url);
+    handleBarcode(result.getText());
+  }catch(e){ scanMsg.textContent = '影像解碼失敗，請再試一次。'; }
+  URL.revokeObjectURL(url);
+});
+
   let currentDeviceId = null;
 
   async function listCams(){
@@ -251,6 +318,42 @@
     XLSX.utils.book_append_sheet(wb, ws, '查詢結果');
     XLSX.writeFile(wb, 'query.xlsx');
   });
+document.getElementById('btnBulk').addEventListener('click', async ()=>{
+  const f = document.getElementById('bulkFile').files[0];
+  if(!f){ alert('請選擇 Excel'); return; }
+  const ab = await f.arrayBuffer();
+  const wb = XLSX.read(ab);
+  const ws = wb.Sheets[wb.SheetNames[0]];
+  const arr = XLSX.utils.sheet_to_json(ws, {defval:''}); // 物件陣列
+
+  // 欄名兼容（中英都接受）
+  const norm = (o)=>({
+    date:  o.date||o.日期||'',
+    code:  o.code||o.料號||'',
+    item:  o.item||o.品項||'',
+    loc:   o.loc ||o.儲位||'',
+    in:    Number(o.in||o.進料量||0),
+    out:   Number(o.out||o.領料量||0),
+    stock: Number(o.stock||o.庫存量||0),
+    barcode: o.barcode||o.條碼||''
+  });
+
+  const rows = arr.map(norm).filter(r=>r.date && (r.in||r.out||r.stock||r.code||r.item));
+  if(!rows.length){ alert('沒有可匯入的資料列'); return; }
+
+  // 分批上傳，降低 GAS 單次執行時間
+  const chunk = 200;
+  for (let i=0;i<rows.length;i+=chunk){
+    const part = rows.slice(i, i+chunk);
+    await fetch(GAS_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({rows: part})
+    });
+    document.getElementById('bulkMsg').textContent = `已上傳 ${Math.min(i+chunk, rows.length)} / ${rows.length}`;
+  }
+  alert('批次入庫完成');
+});
 
   // 預設帶今天
   (function(){
