@@ -53,7 +53,7 @@
   <div class="card-header">批次上傳 Excel → 入庫</div>
   <div class="card-body">
     <input id="bulkFile" type="file" accept=".xlsx,.xls" class="form-control" />
-    <div class="form-text">欄位（第一列標題）：date, code, item, loc, in, out, stock, barcode（日期建議 YYYY-MM-DD）</div>
+    <div class="form-text">欄位（第一列標題）：date, code, item, loc, exp, in, out, stock, barcode,timestamp（日期建議 YYYY-MM-DD）</div>
     <button id="btnBulk" class="btn btn-outline-success mt-2" type="button">上傳入庫</button>
     <small id="bulkMsg" class="text-muted ms-2"></small>
   </div>
@@ -76,6 +76,10 @@
   <div class="col-6 col-md-2">
     <label class="form-label">儲位</label>
     <input id="matLoc" type="text" class="form-control">
+  </div>
+  <div class="col-6 col-md-3">
+    <label class="form-label">效期</label>
+    <input id="matExp" type="date" class="form-control">
   </div>
   <div class="col-6 col-md-2">
     <label class="form-label">進料量(+)</label>
@@ -168,7 +172,7 @@
 
 <script>
 /* ===== 你的 GAS /exec 網址 ===== */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbyQcs-9akEQ1EwZ2d69fRYp3IOvnMqpH8BIAn3y8Jb5cYM8w0e840i1zviiJUB4uH_TUg/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyXk25spCWbzqCz6m0O4izpDcT8HL6tFP6mbjcGMK34gjD1P6OyraTTdai2bA8m6BJBRA/exec';
 
 /* ===== DOM ===== */
 const video    = document.getElementById('video');
@@ -387,6 +391,9 @@ fileScan.addEventListener('change', async (e)=>{
 document.getElementById('matBarcode').addEventListener('change', e=>{
   lookupByBarcode(e.target.value.trim());
 });
+document.getElementById('matBarcode').addEventListener('input', e => {
+  lookupByBarcode(e.target.value.trim());
+});
 
 /* 表單送出（寫入 GAS 並在本地表格即時顯示） */
 document.getElementById('matForm').addEventListener('submit', async e=>{
@@ -411,23 +418,19 @@ document.getElementById('matForm').addEventListener('submit', async e=>{
     await fetch(GAS_URL, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({date:d, barcode:bc, code, item:it, loc, in:qIn, out:qOut})
+      body: JSON.stringify({
+        date:d, barcode:bc, code, item:it, loc,
+        exp: (matExp.value || ''),
+        in:qIn, out:qOut
+      })
     });
-  }catch(err){ console.warn('寫入 GAS 失敗：', err); }
+  }catch(err){
+    console.warn('寫入 GAS 失敗：', err);
+  }
 
   e.target.reset();
   matDate.value = new Date().toISOString().slice(0,10);
 });
-function renderLocal(){
-  tbody.innerHTML = '';
-  data.sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(r=>{
-    tbody.insertAdjacentHTML('beforeend', `<tr>
-      <td>${r.date}</td><td>${r.barcode||''}</td><td>${r.code||''}</td>
-      <td>${r.item||''}</td><td>${r.loc||''}</td>
-      <td>${r.in}</td><td>${r.out}</td><td>${r.stock}</td>
-    </tr>`);
-  });
-}
 
 /* 查詢 / 匯出 */
 document.getElementById('btnQuery').addEventListener('click', async ()=>{
@@ -518,6 +521,7 @@ document.getElementById('btnBulk').addEventListener('click', async ()=>{
     code:    o.code||o.料號||'',
     item:    o.item||o.品項||'',
     loc:     o.loc||o.儲位||'',
+	exp:     excelDateToISO(o.exp || o.效期 || o.expiry || ''),
     in:      Number(o.in||o.進料量||0),
     out:     Number(o.out||o.領料量||0),
     stock:   Number(o.stock||o.庫存量||0),
