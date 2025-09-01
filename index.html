@@ -124,7 +124,7 @@
   <button id="btnSummary" class="btn btn-warning" type="button">彙總(同日×料號×品項×儲位)</button>
 <script>
 /* ============ 你自己的 GAS Web App URL（/exec） ============ */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbxlGqIKZJNDl0FSZ1zz34rVehVP7GbB04KeUCVzSV2MIxDFo32orML9PLfSds9r102Gkg/exec';
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbyh7NP4qYkNdn6MAYZYxWU9fJuvbcoNTIF1gSB_m7LDf6VAo_XeEw29wVsqnXACpQNMdA/exec';
 
 /* ============ DOM references ============ */
 const video    = document.getElementById('video');
@@ -141,6 +141,37 @@ const qBody    = document.querySelector('#qTable tbody');
 
 let data = [];                 // 本頁暫存顯示
 let currentDeviceId = null;
+
+/* 依條碼查商品主檔（Products），找到就自動帶入欄位 */
+let lookupTimer = null;
+async function lookupByBarcode(barcode) {
+  if (!barcode) return;
+  clearTimeout(lookupTimer);
+  // 簡單防抖，避免同一條碼連續掃多次
+  lookupTimer = setTimeout(async () => {
+    try {
+      const url = `${GAS_URL}?action=lookup&barcode=${encodeURIComponent(barcode)}`;
+      const res = await fetch(url);
+      const json = await res.json();
+      if (json && json.found) {
+        // 依你的 Products 欄位：barcode, code, item, spec, default_loc
+        if (json.row.code)  document.getElementById('matCode').value = json.row.code;
+        if (json.row.item)  document.getElementById('matItem').value = json.row.item;
+        if (json.row.loc)   document.getElementById('matLoc').value  = json.row.loc;  // 由 default_loc 帶出
+        setScanMsg(`已帶入：${json.row.item}（料號 ${json.row.code}，儲位 ${json.row.loc||'-'}）`);
+      } else {
+        setScanMsg('主檔無此條碼，請手動輸入品項/料號/儲位後送出。');
+      }
+    } catch (e) {
+      setScanMsg('查詢主檔失敗：' + e);
+    }
+  }, 150);
+}
+
+/* 讓手動輸入條碼也能觸發帶出 */
+document.getElementById('matBarcode').addEventListener('change', (e)=>{
+  lookupByBarcode(e.target.value.trim());
+});
 
 /* ============ 掃描器（只掃 1D 條碼） ============ */
 const formats = [
