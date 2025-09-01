@@ -17,23 +17,26 @@
 </style>
 </head>
 <body class="container">
-  <h3 class="my-2">原物料管理（雲端）</h3>
-
-  <!-- 掃碼區 -->
-  <div class="card mb-3">
-    <div class="card-header">掃碼新增（條碼/QR）</div>
-    <div class="card-body">
-      <div class="d-flex gap-2 align-items-end flex-wrap">
-        <div>
-          <label class="form-label">相機</label>
-          <select id="camSelect" class="form-select" style="min-width:220px"></select>
-        </div>
-        <button id="btnPhotoScan" class="btn btn-outline-secondary btn-sm mt-2">拍照掃碼（備援）</button>
-        <span id="scanHint" class="text-muted small ms-2"></span>
+<div class="card mb-3">
+  <div class="card-header">掃碼新增（條碼/QR）</div>
+  <div class="card-body">
+    <div class="d-flex gap-2 align-items-end flex-wrap">
+      <div>
+        <label class="form-label">相機</label>
+        <select id="camSelect" class="form-select" style="min-width:220px"></select>
       </div>
-      <video id="video" playsinline muted style="width:100%;max-width:380px;margin-top:.5rem;border:1px solid #ddd;border-radius:6px"></video>
+      <button id="btnScanStart" class="btn btn-primary">啟動掃描</button>
+      <button id="btnScanStop"  class="btn btn-outline-secondary">停止</button>
+      <button id="btnPhotoScan" class="btn btn-outline-secondary">拍照掃碼（備援）</button>
+      <span id="scanHint" class="text-muted small ms-2"></span>
+      <span id="scanMsg"  class="text-danger small ms-2"></span>
     </div>
+
+    <video id="video" playsinline muted style="width:100%;max-width:380px;margin-top:.5rem;border:1px solid #ddd;border-radius:6px"></video>
+    <input id="fileScan" type="file" accept="image/*" capture="environment" class="d-none">
   </div>
+</div>
+
 <div class="card my-3">
   <div class="card-header">批次上傳 Excel → 入庫</div>
   <div class="card-body">
@@ -48,7 +51,7 @@
   <form id="matForm" class="row g-3 align-items-end">
     <div class="col-6 col-md-3">
       <label class="form-label">日期</label>
-      <input id="fileScan" type="file" accept="image/*" capture="environment" class="d-none">
+      <input id="matDate" type="date" class="form-control" required>
     </div>
     <div class="col-6 col-md-3">
       <label class="form-label">料號</label>
@@ -119,6 +122,7 @@
     </div>
   </div>
   <button id="btnSummary" class="btn btn-warning" type="button">彙總(同日×料號×品項×儲位)</button>
+<script>
 document.getElementById('btnSummary').addEventListener('click', async ()=>{
   const qs = new URLSearchParams({
     action:'summary',
@@ -140,7 +144,6 @@ document.getElementById('btnSummary').addEventListener('click', async ()=>{
   }catch(e){ alert('彙總失敗：'+e); }
 });
 
-  <script>
   // === 你的 GAS Web App URL ===
   const GAS_URL = 'https://script.google.com/macros/s/AKfycbz0jJaxYpwZoVJWRczr1HduKs_SFDaHfOSN4qvloGrK-o2yGpRoArwqjxX4X4JLWJzTAw/exec';
 
@@ -148,93 +151,98 @@ document.getElementById('btnSummary').addEventListener('click', async ()=>{
   let data = [];
   const tbody = document.querySelector('#matTable tbody');
 
-  // === 掃碼：列出相機、啟動/停止 ===
-  const video = document.getElementById('video');
-  const camSel = document.getElementById('camSelect');
+  // === ZXing 掃描 ===
+  const video   = document.getElementById('video');
+  const camSel  = document.getElementById('camSelect');
+  const btnStart= document.getElementById('btnScanStart');
+  const btnStop = document.getElementById('btnScanStop');
+  const btnPhoto= document.getElementById('btnPhotoScan');
+  const fileScan= document.getElementById('fileScan');
   const scanMsg = document.getElementById('scanMsg');
+  const scanHint= document.getElementById('scanHint');
+
   const codeReader = new ZXing.BrowserMultiFormatReader();
-  const isLINE = /Line/i.test(navigator.userAgent);
-  if (isLINE) document.getElementById('scanHint').textContent = '提示：LINE 內建瀏覽器常擋鏡頭，請以右上角「在瀏覽器開啟」。';
-
-  async function ensureCamPermission(){
-      try{
-      const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:'environment'}});
-      s.getTracks().forEach(t=>t.stop());
-      return true;
-      }catch(e){ return false; }
-    }
-
-document.getElementById('btnScanStart').addEventListener('click', async ()=>{
-  scanMsg.textContent='';
-  const ok = await ensureCamPermission();
-  if(!ok){ scanMsg.textContent='鏡頭權限被拒，請至瀏覽器網站權限允許相機，或改用「拍照掃碼」。'; return; }
-  if(!currentDeviceId) await listCams();
-  try{
-    await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result)=>{ if(result){ handleBarcode(result.getText()); stopScan(); } });
-  }catch(e){ scanMsg.textContent = '啟動失敗：'+e; }
-});
-
-function handleBarcode(text){
-  document.getElementById('matBarcode').value = text;
-  lookupByBarcode(text);
-}
-
-// 備援：拍照掃碼
-document.getElementById('btnPhotoScan').addEventListener('click', ()=> document.getElementById('fileScan').click());
-document.getElementById('fileScan').addEventListener('change', async (ev)=>{
-  const f = ev.target.files[0]; if(!f) return;
-  const url = URL.createObjectURL(f);
-  try{
-    const result = await new ZXing.BrowserMultiFormatReader().decodeFromImageUrl(url);
-    handleBarcode(result.getText());
-  }catch(e){ scanMsg.textContent = '影像解碼失敗，請再試一次。'; }
-  URL.revokeObjectURL(url);
-});
-
   let currentDeviceId = null;
 
+  const isLINE = /Line/i.test(navigator.userAgent);
+  if (isLINE) scanHint.textContent = '提示：LINE 內建瀏覽器常擋鏡頭，請用右上角「在瀏覽器開啟」。';
+
+  // 取代原本的 listCams()
   async function listCams(){
     try{
-      const devices = await ZXing.BrowserCodeReader.listVideoInputDevices();
-      camSel.innerHTML = devices.map(d=>`<option value="${d.deviceId}">${d.label||d.deviceId}</option>`).join('');
-      if(devices[0]) currentDeviceId = devices[0].deviceId;
-    }catch(e){ scanMsg.textContent = '找不到鏡頭：'+e; }
+      const devices = await navigator.mediaDevices.enumerateDevices();
+      const cams = devices.filter(d => d.kind === 'videoinput');
+      camSel.innerHTML = cams.map((d,i)=>`<option value="${d.deviceId}">${d.label || `鏡頭 ${i+1}`}</option>`).join('');
+      if (cams.length) currentDeviceId = cams[0].deviceId;
+      else setScanMsg('找不到鏡頭（可能被瀏覽器或權限禁止）');
+    }catch(e){
+      setScanMsg('列出鏡頭失敗：' + e);
+    }
   }
-  camSel.addEventListener('change',()=> currentDeviceId = camSel.value);
 
-  document.getElementById('btnScanStart').addEventListener('click', async ()=>{
-    scanMsg.textContent='';
-    if(!currentDeviceId) await listCams();
+  // 要一次權限（避免直接被擋）
+  async function ensureCamPermission(){
     try{
-      await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result, err)=>{
-        if(result){
-          const text = result.getText();
-          // 1) 顯示到條碼欄
-          document.getElementById('matBarcode').value = text;
-          // 2) 向 GAS 取主檔
-          lookupByBarcode(text);
-          // 3) 讀到即停（也可改成連續模式）
-          stopScan();
+      const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' }, audio: false });
+      s.getTracks().forEach(t=>t.stop());
+      return true;
+    }catch(e){
+      return false;
+    }
+  }
+
+  function setScanMsg(t){ scanMsg.textContent = t || ''; }
+
+  // 啟動掃描
+  btnStart.addEventListener('click', async ()=>{
+    setScanMsg('');
+    if (isLINE) {
+      setScanMsg('LINE 可能擋鏡頭，請改用 Chrome/Safari 開啟；或使用「拍照掃碼」。');
+    }
+    const ok = await ensureCamPermission();
+    if (!ok) { setScanMsg('鏡頭權限被拒，請到瀏覽器→網站權限允許相機，或用「拍照掃碼」。'); return; }
+
+    if (!currentDeviceId) await listCams();
+    try{
+      await codeReader.decodeFromVideoDevice(currentDeviceId, video, (result)=>{
+        if (result) {
+          handleBarcode(result.getText());
+          stopScan(); // 掃到就停（如果要連續掃描，可把這行拿掉）
         }
       });
-    }catch(e){ scanMsg.textContent = '啟動失敗：'+e; }
+    }catch(e){ setScanMsg('啟動失敗：' + e); }
   });
-  document.getElementById('btnScanStop').addEventListener('click', stopScan);
+
+  // 停止掃描
+  btnStop.addEventListener('click', stopScan);
   function stopScan(){ try{ codeReader.reset(); }catch{} }
 
-  async function lookupByBarcode(bc){
-    try{
-      const url = `${GAS_URL}?action=lookup&barcode=${encodeURIComponent(bc)}`;
-      const r = await fetch(url); const j = await r.json();
-      if(j && (j.code || j.item)){
-        if(j.code) document.getElementById('matCode').value = j.code;
-        if(j.item) document.getElementById('matItem').value = j.item;
-        if(j.loc)  document.getElementById('matLoc').value  = j.loc;
-      }else{
-        scanMsg.textContent = '主檔無此條碼，可手動輸入';
-      }
-    }catch(e){ scanMsg.textContent = '主檔查詢失敗：'+e; }
+  // 掃到條碼後：寫回欄位＋主檔帶出
+  function handleBarcode(text){
+    document.getElementById('matBarcode').value = text;
+    lookupByBarcode(text); // 你既有的函式：會去 GAS lookup -> 帶出品名/料號/儲位
   }
+
+  // 備援：拍照掃碼（不吃相機權限）
+  btnPhoto.addEventListener('click', ()=> fileScan.click());
+  fileScan.addEventListener('change', async (ev)=>{
+    const f = ev.target.files[0]; if(!f) return;
+    const url = URL.createObjectURL(f);
+    try{
+      const result = await new ZXing.BrowserMultiFormatReader().decodeFromImageUrl(url);
+      handleBarcode(result.getText());
+    }catch(e){ setScanMsg('影像解碼失敗，請再試一次。'); }
+    URL.revokeObjectURL(url);
+  });
+
+  // 頁面載入：今天日期 & 列相機
+  (function(){
+    const t = new Date().toISOString().slice(0,10);
+    const d = document.getElementById('matDate');
+    if (d) d.value = t;
+    listCams();
+  })();
+
 
   // === 送出：本地合併 + 寫入 GAS（Transactions） ===
   document.getElementById('matForm').addEventListener('submit', async (e)=>{
@@ -366,3 +374,5 @@ document.getElementById('btnBulk').addEventListener('click', async ()=>{
   </script>
 </body>
 </html>
+
+
