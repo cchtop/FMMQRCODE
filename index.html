@@ -123,14 +123,178 @@
   </div>
   <button id="btnSummary" class="btn btn-warning" type="button">彙總(同日×料號×品項×儲位)</button>
 <script>
+/* ============ 你自己的 GAS Web App URL（/exec） ============ */
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbxlGqIKZJNDl0FSZ1zz34rVehVP7GbB04KeUCVzSV2MIxDFo32orML9PLfSds9r102Gkg/exec';
+
+/* ============ DOM references ============ */
+const video    = document.getElementById('video');
+const camSel   = document.getElementById('camSelect');
+const btnStart = document.getElementById('btnScanStart');
+const btnStop  = document.getElementById('btnScanStop');
+const btnPhoto = document.getElementById('btnPhotoScan');
+const fileScan = document.getElementById('fileScan');
+const scanMsg  = document.getElementById('scanMsg');
+const scanHint = document.getElementById('scanHint');
+
+const tbody    = document.querySelector('#matTable tbody');
+const qBody    = document.querySelector('#qTable tbody');
+
+let data = [];                 // 本頁暫存顯示
+let currentDeviceId = null;
+
+/* ============ 掃描器（只掃 1D 條碼） ============ */
+const formats = [
+  ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
+  ZXing.BarcodeFormat.UPC_A,  ZXing.BarcodeFormat.CODE_128,
+  ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.ITF
+];
+const hints = new Map([[ZXing.DecodeHintType.POSSIBLE_FORMATS, formats]]);
+const codeReader = new ZXing.BrowserMultiFormatReader(hints, 400);
+
+const isLINE = /Line/i.test(navigator.userAgent);
+if (isLINE) scanHint.textContent = '提示：LINE 內建瀏覽器常擋鏡頭，右上角「在瀏覽器開啟」成功率較高。';
+
+function setScanMsg(t){ scanMsg.textContent = t || ''; }
+
+async function ensureCamPermission(){
+  try{
+    const s = await navigator.mediaDevices.getUserMedia({video:{facingMode:{ideal:'environment'}}, audio:false});
+    s.getTracks().forEach(t=>t.stop());
+    return true;
+  }catch{ return false; }
+}
+
+async function listCams(){
+  try{
+    const devs = await navigator.mediaDevices.enumerateDevices();
+    const cams = devs.filter(d=>d.kind==='videoinput');
+    if (!cams.length) { setScanMsg('找不到鏡頭（可能權限被拒）'); return; }
+    cams.sort((a,b)=>{
+      const sa=(a.label||'').toLowerCase(), sb=(b.label||'').toLowerCase();
+      const ra=/back|rear|environment/.test(sa)?0:1, rb=/back|rear|environment/.test(sb)?0:1;
+      return ra-rb;
+    });
+    camSel.innerHTML = cams.map((d,i)=>`<option value="${d.deviceId}">${d.label||`camera ${i+1}`}</option>`).join('');
+    currentDeviceId = cams[0].deviceId;
+  }catch(e){ setScanMsg('列出鏡頭失敗：'+e); }
+}
+camSel.addEventListener('change', ()=> currentDeviceId = camSel.value);
+
+btnStart.addEventListener('click', async ()=>{
+  setScanMsg('');
+  const ok = await ensureCamPermission();
+  if (!ok){ setScanMsg('鏡頭權限被拒，請到瀏覽器網站權限開啟或用「拍照掃碼」。'); return; }
+  if (!currentDeviceId) await listCams();
+  try{
+    if (currentDeviceId) {
+      await codeReader.decodeFromVideoDevice(currentDeviceId, video, onScan);
+    } else {
+      await codeReader.decodeFromConstraints({video:{facingMode:{ideal:'environment'}}}, video, onScan);
+    }
+  }catch(e){ setScanMsg('啟動失敗：'+e); }
+});
+btnStop.addEventListener('click', ()=>{ try{ codeReader.reset(); }catch{} });
+
+function onScan(result, err){
+  if (result){
+    handleBarcode(result.getText());
+    btnStop.click(); // 若要連續掃，把這行拿掉
+  }
+}
+
+btnPhoto.addEventListener('click', ()=> fileScan.click());
+fileScan.addEventListener('change', async ev=>{
+  const f = ev.target.files[0]; if(!f) return;
+  const url = URL.createObjectURL(f);
+  try{
+    const res = await new ZXing.BrowserMultiFormatReader(hints).decodeFromImageUrl(url);
+    handleBarcode(res.getText());
+  }catch{
+    if ('BarcodeDetector' in window){
+      try{
+        const img = new Image(); img.src = url; await img.decode();
+        const bd = new BarcodeDetector({formats:['ean_13','ean_8','upc_a','code_128','code_39','itf']});
+        const r = await bd.detect(img);
+        if (r && r[0] && r[0].rawValue) handleBarcode(r[0].rawValue);
+        else setScanMsg('影像解碼失敗，請再拍清楚一點。');
+      }catch{ setScanMsg('影像解碼失敗，請再試一次。'); }
+    }else setScanMsg('此瀏覽器不支援影像解碼，請改用相機掃描。');
+  }
+  URL.revokeObjectURL(url);
+});
+
+function handleBarcode(code){
+  document.getElementById('matBarcode').value = code;
+  lookupByBarcode(code); // 若你有在 GAS 做主檔帶出，這裡呼叫即可
+}
+
+/* ============ 表單送出（寫 GAS + 本地表格） ============ */
+document.getElementById('matForm').addEventListener('submit', async e=>{
+  e.preventDefault();
+  const d   = matDate.value;
+  const bc  = (matBarcode.value||'').trim();
+  const code= matCode.value.trim();
+  const it  = matItem.value.trim();
+  const loc = matLoc.value.trim();
+  const qIn = parseFloat(matIn.value)||0;
+  const qOut= parseFloat(matOut.value)||0;
+
+  const stock = data.filter(r=>r.date===d && r.code===code && r.item===it && r.loc===loc)
+                    .reduce((a,c)=>a+c.in-c.out,0) + qIn - qOut;
+
+  const ex = data.find(r=>r.date===d && r.code===code && r.item===it && r.loc===loc);
+  if (ex){ ex.in+=qIn; ex.out+=qOut; ex.stock=stock; }
+  else   { data.push({date:d, barcode:bc, code, item:it, loc, in:qIn, out:qOut, stock}); }
+  renderLocal();
+
+  try{
+    await fetch(GAS_URL, {
+      method:'POST',
+      headers:{'Content-Type':'text/plain;charset=utf-8'},
+      body: JSON.stringify({date:d, barcode:bc, code, item:it, loc, in:qIn, out:qOut, stock})
+    });
+  }catch(err){ console.warn('寫入 GAS 失敗：', err); }
+
+  e.target.reset();
+  matDate.value = new Date().toISOString().slice(0,10);
+});
+function renderLocal(){
+  tbody.innerHTML = '';
+  data.sort((a,b)=>new Date(a.date)-new Date(b.date)).forEach(r=>{
+    tbody.insertAdjacentHTML('beforeend', `<tr>
+      <td>${r.date}</td><td>${r.barcode||''}</td><td>${r.code||''}</td>
+      <td>${r.item||''}</td><td>${r.loc||''}</td>
+      <td>${r.in}</td><td>${r.out}</td><td>${r.stock}</td>
+    </tr>`);
+  });
+}
+
+/* ============ 查詢與彙總（GAS） ============ */
+document.getElementById('btnQuery').addEventListener('click', async ()=>{
+  const qs = new URLSearchParams({
+    action:'query',
+    from: qFrom.value || '', to: qTo.value || '',
+    code: qCode.value || '', item: qItem.value || '', loc: qLoc.value || ''
+  }).toString();
+  try{
+    const r = await fetch(`${GAS_URL}?${qs}`);
+    const j = await r.json();
+    qBody.innerHTML='';
+    (j.rows||[]).forEach(r=>{
+      qBody.insertAdjacentHTML('beforeend', `<tr>
+        <td>${r.date||''}</td><td>${r.barcode||''}</td><td>${r.code||''}</td>
+        <td>${r.item||''}</td><td>${r.loc||''}</td>
+        <td>${r.in||0}</td><td>${r.out||0}</td><td>${r.stock||0}</td><td>${r.ts||''}</td>
+      </tr>`);
+    });
+  }catch(e){ alert('查詢失敗：'+e); }
+});
+
 document.getElementById('btnSummary').addEventListener('click', async ()=>{
   const qs = new URLSearchParams({
     action:'summary',
-    from: qFrom.value || '',
-    to:   qTo.value   || '',
-    code: qCode.value || '',
-    item: qItem.value || '',
-    loc:  qLoc.value  || ''
+    from: qFrom.value || '', to: qTo.value || '',
+    code: qCode.value || '', item: qItem.value || '', loc: qLoc.value || ''
   }).toString();
   try{
     const r = await fetch(`${GAS_URL}?${qs}`); const j = await r.json();
@@ -144,318 +308,40 @@ document.getElementById('btnSummary').addEventListener('click', async ()=>{
   }catch(e){ alert('彙總失敗：'+e); }
 });
 
-  // === 你的 GAS Web App URL ===
-  const GAS_URL = 'https://script.google.com/macros/s/AKfycbxlGqIKZJNDl0FSZ1zz34rVehVP7GbB04KeUCVzSV2MIxDFo32orML9PLfSds9r102Gkg/exec';
-
-  // === 前端暫存資料（只用於本頁顯示，不是權威資料來源） ===
-  let data = [];
-  const tbody = document.querySelector('#matTable tbody');
-
-  <script>
-/* === 掃描設定（只掃 1D 條碼） === */
-const formats = [
-  ZXing.BarcodeFormat.EAN_13, ZXing.BarcodeFormat.EAN_8,
-  ZXing.BarcodeFormat.UPC_A,  ZXing.BarcodeFormat.CODE_128,
-  ZXing.BarcodeFormat.CODE_39, ZXing.BarcodeFormat.ITF
-];
-const hints = new Map();
-hints.set(ZXing.DecodeHintType.POSSIBLE_FORMATS, formats);
-const codeReader = new ZXing.BrowserMultiFormatReader(hints, 400); // 400ms 間隔
-
-const video    = document.getElementById('video');
-const camSel   = document.getElementById('camSelect');
-const btnStart = document.getElementById('btnScanStart');
-const btnStop  = document.getElementById('btnScanStop');
-const btnPhoto = document.getElementById('btnPhotoScan');
-const fileScan = document.getElementById('fileScan');
-const scanMsg  = document.getElementById('scanMsg');
-const scanHint = document.getElementById('scanHint');
-let   currentDeviceId = null;
-
-const isLINE = /Line/i.test(navigator.userAgent);
-if (isLINE) scanHint.textContent = '提示：LINE 內建瀏覽器常擋鏡頭，請用右上角「在瀏覽器開啟」。';
-
-function setScanMsg(t){ scanMsg.textContent = t||''; }
-
-/* 先要一次權限，才能拿到鏡頭 label */
-async function ensureCamPermission() {
-  try {
-    const s = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
-    s.getTracks().forEach(t => t.stop());
-    return true;
-  } catch { return false; }
-}
-
-/* 列出鏡頭：優先選擇「back / environment / 後鏡頭」 */
-async function listCams() {
-  try {
-    const devices = await navigator.mediaDevices.enumerateDevices();
-    const cams = devices.filter(d => d.kind === 'videoinput');
-    if (!cams.length) { setScanMsg('找不到鏡頭（可能被瀏覽器或權限禁止）'); return; }
-
-    // 嘗試後鏡頭排序在前
-    cams.sort((a,b)=>{
-      const sa = (a.label||'').toLowerCase(), sb = (b.label||'').toLowerCase();
-      const ra = /back|rear|environment/.test(sa) ? 0 : 1;
-      const rb = /back|rear|environment/.test(sb) ? 0 : 1;
-      return ra - rb;
-    });
-
-    camSel.innerHTML = cams.map((d,i)=>`<option value="${d.deviceId}">${d.label || `camera ${i+1}`}</option>`).join('');
-    currentDeviceId = cams[0].deviceId;
-  } catch(e){ setScanMsg('列出鏡頭失敗：'+e); }
-}
-camSel.addEventListener('change', ()=> currentDeviceId = camSel.value);
-
-/* 啟動掃描（偏好後鏡頭；若清單已選特定 deviceId，採用 deviceId） */
-btnStart.addEventListener('click', async ()=>{
-  setScanMsg('');
-  if (isLINE) setScanMsg('LINE 可能擋鏡頭，請改用 Chrome/Safari；或用「拍照掃碼」。');
-
-  const ok = await ensureCamPermission();
-  if (!ok) { setScanMsg('鏡頭權限被拒，請在瀏覽器網站權限允許相機或用「拍照掃碼」。'); return; }
-
-  if (!currentDeviceId) await listCams();
-
-  try {
-    // 若有選 deviceId 就用 deviceId，否則給 constraints 偏好後鏡頭
-    if (currentDeviceId) {
-      await codeReader.decodeFromVideoDevice(currentDeviceId, video, onScan);
-    } else {
-      await codeReader.decodeFromConstraints({ video: { facingMode: { ideal:'environment' } } }, video, onScan);
-    }
-  } catch(e){ setScanMsg('啟動失敗：'+e); }
-});
-
-function onScan(result, err){
-  if (result) {
-    handleBarcode(result.getText());
-    stopScan(); // 若要連掃，把這行拿掉
-  }
-  // err 會很頻繁，不必顯示
-}
-
-btnStop.addEventListener('click', stopScan);
-function stopScan(){ try{ codeReader.reset(); }catch{} }
-
-/* 掃到條碼 → 寫欄位 + 主檔帶出 */
-function handleBarcode(text){
-  document.getElementById('matBarcode').value = text;
-  lookupByBarcode(text); // 你既有的 lookup（GAS）
-}
-
-/* 拍照掃碼（先 ZXing → 失敗再用 Browser BarcodeDetector） */
-btnPhoto.addEventListener('click', ()=> fileScan.click());
-fileScan.addEventListener('change', async (ev)=>{
-  const f = ev.target.files[0]; if(!f) return;
-  const url = URL.createObjectURL(f);
-  try {
-    const res = await new ZXing.BrowserMultiFormatReader(hints).decodeFromImageUrl(url);
-    handleBarcode(res.getText());
-  } catch {
-    if ('BarcodeDetector' in window) {
-      try {
-        const img = new Image(); img.src = url; await img.decode();
-        const bd = new BarcodeDetector({formats:['ean_13','ean_8','upc_a','code_128','code_39','itf']});
-        const r = await bd.detect(img);
-        if (r && r[0] && r[0].rawValue){ handleBarcode(r[0].rawValue); }
-        else setScanMsg('影像解碼失敗，請再拍清楚一點。');
-      } catch { setScanMsg('影像解碼失敗，請再試一次。'); }
-    } else setScanMsg('此瀏覽器不支援影像解碼，請改用相機掃描。');
-  }
-  URL.revokeObjectURL(url);
-});
-
-/* 頁面載入：今天日期 + 先要一次權限再列鏡頭 */
-(async function(){
-  document.getElementById('matDate').value = new Date().toISOString().slice(0,10);
-  await ensureCamPermission();
-  await listCams();
-})();
-
+/* ============ 批次上傳 Excel（日期正規化 + 分批送） ============ */
 function excelDateToISO(v){
-  if (typeof v === 'number'){                 // 例如 45901
+  if (typeof v === 'number'){                 // e.g. 45901
     const d = XLSX.SSF.parse_date_code(v);
     const dt = new Date(Date.UTC(d.y, d.m-1, d.d));
     return dt.toISOString().slice(0,10);
   }
   if (typeof v === 'string'){
-    // 常見分隔：/ 或 -，統一成 yyyy-mm-dd
     const m = v.match(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
-    if (m) {
-      const y = +m[1], mo = (+m[2]).toString().padStart(2,'0'), da = (+m[3]).toString().padStart(2,'0');
-      return `${y}-${mo}-${da}`;
-    }
+    if (m) return `${m[1]}-${String(+m[2]).padStart(2,'0')}-${String(+m[3]).padStart(2,'0')}`;
   }
   return '';
 }
-
-const norm = (o)=>({
-  date:  excelDateToISO(o.date||o.日期||''),
-  code:  o.code||o.料號||'',
-  item:  o.item||o.品項||'',
-  loc:   o.loc ||o.儲位||'',
-  in:    Number(o.in||o.進料量||0),
-  out:   Number(o.out||o.領料量||0),
-  stock: Number(o.stock||o.庫存量||0),
-  barcode: o.barcode||o.條碼||''
-});
-
-function normDate(v){
-  if (typeof v === 'number') {
-    // Excel serial → Date
-    const ms = (v - 25569) * 86400 * 1000;
-    return Utilities.formatDate(new Date(ms), Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyy-MM-dd');
-  }
-  const m = String(v||'').match(/(\d{4})[\/-](\d{1,2})[\/-](\d{1,2})/);
-  if (m) return Utilities.formatDate(new Date(m[1], m[2]-1, m[3]), Session.getScriptTimeZone() || 'Asia/Taipei','yyyy-MM-dd');
-  return String(v||'');
-}
-
-function doPost(e){
-  try{
-    const ss   = SpreadsheetApp.openById(SHEET_ID);
-    const sh   = ss.getSheetByName(TXN_SHEET_NAME) || ss.insertSheet(TXN_SHEET_NAME);
-    const body = JSON.parse(e.postData.contents || '{}');
-
-    // 讀取既有 key
-    const last = sh.getLastRow();
-    const existing = new Set();
-    if (last >= 2){
-      const rng = sh.getRange(2,1,last-1,8).getValues(); // A:H = date,code,item,loc,in,out,stock,barcode
-      rng.forEach(r => existing.add([r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7]].join('|')));
-    }
-
-    // 整理要寫入的 rows
-    const pack = (p)=>[
-      normDate(p.date), p.code||'', p.item||'', p.loc||'',
-      Number(p.in)||0, Number(p.out)||0, Number(p.stock)||0,
-      p.barcode||'', new Date()
-    ];
-
-    let rows = [];
-    if (Array.isArray(body.rows)) rows = body.rows.map(pack);
-    else rows = [pack(body)];
-
-    // 去重
-    const fresh = rows.filter(r => !existing.has([r[0],r[1],r[2],r[3],r[4],r[5],r[6],r[7]].join('|')));
-
-    if (fresh.length){
-      sh.getRange(sh.getLastRow()+1, 1, fresh.length, fresh[0].length).setValues(fresh);
-    }
-    return ContentService.createTextOutput('ok');
-  }catch(err){
-    return ContentService.createTextOutput('error:'+err);
-  }
-}
-
-
-  // === 送出：本地合併 + 寫入 GAS（Transactions） ===
-  document.getElementById('matForm').addEventListener('submit', async (e)=>{
-    e.preventDefault();
-    const d = matDate.value;
-    const code = matCode.value.trim();
-    const it   = matItem.value.trim();
-    const loc  = matLoc.value.trim();
-    const qIn  = parseFloat(matIn.value)||0;
-    const qOut = parseFloat(matOut.value)||0;
-    const bc   = (matBarcode.value||'').trim();
-
-    const stock = data
-      .filter(r => r.date===d && r.code===code && r.item===it && r.loc===loc)
-      .reduce((a,c)=> a + c.in - c.out, 0) + qIn - qOut;
-
-    const ex = data.find(r => r.date===d && r.code===code && r.item===it && r.loc===loc);
-    if(ex){ ex.in+=qIn; ex.out+=qOut; ex.stock=stock; }
-    else  { data.push({date:d, barcode:bc, code, item:it, loc, in:qIn, out:qOut, stock}); }
-
-    renderLocal();
-    e.target.reset(); matDate.value = new Date().toISOString().slice(0,10);
-
-    // 寫入 GAS
-    try{
-      await fetch(GAS_URL, {
-        method:'POST',
-        headers:{'Content-Type':'text/plain;charset=utf-8'}, // 避免預檢
-        body: JSON.stringify({date:d, barcode:bc, code, item:it, loc, in:qIn, out:qOut, stock})
-        // 若公司網路很嚴格，可加 mode:'no-cors'
-      });
-    }catch(e){ console.warn('寫入 GAS 失敗：', e); }
-  });
-
-  function renderLocal(){
-    tbody.innerHTML='';
-    data.sort((a,b)=> new Date(a.date)-new Date(b.date)).forEach(r=>{
-      tbody.insertAdjacentHTML('beforeend', `<tr>
-        <td>${r.date}</td><td>${r.barcode||''}</td><td>${r.code||''}</td>
-        <td>${r.item||''}</td><td>${r.loc||''}</td>
-        <td>${r.in}</td><td>${r.out}</td><td>${r.stock}</td>
-      </tr>`);
-    });
-  }
-
-  // === 線上查詢（讀 Transactions） ===
-  const qBody = document.querySelector('#qTable tbody');
-  document.getElementById('btnQuery').addEventListener('click', async ()=>{
-    const qs = new URLSearchParams({
-      action:'query',
-      from: qFrom.value || '',
-      to:   qTo.value   || '',
-      code: qCode.value || '',
-      item: qItem.value || '',
-      loc:  qLoc.value  || ''
-    }).toString();
-    try{
-      const r = await fetch(`${GAS_URL}?${qs}`);
-      const j = await r.json();
-      qBody.innerHTML='';
-      (j.rows||[]).forEach(r=>{
-        qBody.insertAdjacentHTML('beforeend', `<tr>
-          <td>${r.date||''}</td><td>${r.barcode||''}</td><td>${r.code||''}</td>
-          <td>${r.item||''}</td><td>${r.loc||''}</td>
-          <td>${r.in||0}</td><td>${r.out||0}</td><td>${r.stock||0}</td><td>${r.ts||''}</td>
-        </tr>`);
-      });
-    }catch(e){ alert('查詢失敗：'+e); }
-  });
-
-  document.getElementById('btnQueryXlsx').addEventListener('click', ()=>{
-    const rows = [...document.querySelectorAll('#qTable tbody tr')].map(tr=>{
-      const tds = tr.querySelectorAll('td');
-      return {
-        日期: tds[0].innerText, 條碼: tds[1].innerText, 料號: tds[2].innerText, 品項: tds[3].innerText,
-        儲位: tds[4].innerText, 進料量: tds[5].innerText, 領料量: tds[6].innerText, 庫存量: tds[7].innerText, 寫入時間: tds[8].innerText
-      };
-    });
-    const wb = XLSX.utils.book_new();
-    const ws = XLSX.utils.json_to_sheet(rows);
-    XLSX.utils.book_append_sheet(wb, ws, '查詢結果');
-    XLSX.writeFile(wb, 'query.xlsx');
-  });
 document.getElementById('btnBulk').addEventListener('click', async ()=>{
   const f = document.getElementById('bulkFile').files[0];
   if(!f){ alert('請選擇 Excel'); return; }
   const ab = await f.arrayBuffer();
   const wb = XLSX.read(ab);
   const ws = wb.Sheets[wb.SheetNames[0]];
-  const arr = XLSX.utils.sheet_to_json(ws, {defval:''}); // 物件陣列
+  const arr = XLSX.utils.sheet_to_json(ws, {defval:''});
 
-  // 欄名兼容（中英都接受）
-  const norm = (o)=>({
-    date:  o.date||o.日期||'',
-    code:  o.code||o.料號||'',
-    item:  o.item||o.品項||'',
-    loc:   o.loc ||o.儲位||'',
-    in:    Number(o.in||o.進料量||0),
-    out:   Number(o.out||o.領料量||0),
-    stock: Number(o.stock||o.庫存量||0),
+  const rows = arr.map(o=>({
+    date:    excelDateToISO(o.date||o.日期||''),
+    code:    o.code||o.料號||'',
+    item:    o.item||o.品項||'',
+    loc:     o.loc||o.儲位||'',
+    in:      Number(o.in||o.進料量||0),
+    out:     Number(o.out||o.領料量||0),
+    stock:   Number(o.stock||o.庫存量||0),
     barcode: o.barcode||o.條碼||''
-  });
+  })).filter(r=>r.date && (r.in||r.out||r.stock||r.code||r.item));
 
-  const rows = arr.map(norm).filter(r=>r.date && (r.in||r.out||r.stock||r.code||r.item));
   if(!rows.length){ alert('沒有可匯入的資料列'); return; }
 
-  // 分批上傳，降低 GAS 單次執行時間
   const chunk = 200;
   for (let i=0;i<rows.length;i+=chunk){
     const part = rows.slice(i, i+chunk);
@@ -469,15 +355,13 @@ document.getElementById('btnBulk').addEventListener('click', async ()=>{
   alert('批次入庫完成');
 });
 
-  // 預設帶今天
-  (function(){
-    const t = new Date().toISOString().slice(0,10);
-    document.getElementById('matDate').value = t;
-    document.getElementById('qFrom').value = t;
-    document.getElementById('qTo').value   = t;
-    listCams();
-  })();
-  </script>
+/* ============ 初始：今天日期 + 權限 + 鏡頭清單 ============ */
+(function(){
+  const t = new Date().toISOString().slice(0,10);
+  matDate.value = t; qFrom.value = t; qTo.value = t;
+  ensureCamPermission().then(listCams);
+})();
+</script>
 </body>
 </html>
 
