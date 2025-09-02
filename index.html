@@ -2,7 +2,7 @@
 <html lang="zh-Hant">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>原物料管理（雲端版）</title>
 
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet" />
@@ -11,10 +11,9 @@
 <script src="https://unpkg.com/@zxing/library@0.20.0"></script>
 
 <style>
-  body { padding: 1rem; }
-  .table-responsive { max-height: 45vh; overflow-y: auto; }
-  .report-border td, .report-border th { border: 1px solid #000; padding: 4px; text-align: center; }
-  .signature-line { height: 40px; border-bottom: 1px solid #000; width: 160px; display: inline-block; margin-left: .5rem; margin-right: 1.5rem; }
+  body{padding:1rem}
+  .table-responsive{max-height:45vh;overflow-y:auto}
+  video{width:100%;max-width:420px;border:1px solid #ddd;border-radius:8px}
 </style>
 </head>
 <body class="container">
@@ -31,19 +30,16 @@
       <button id="btnScanStart" type="button" class="btn btn-primary">啟動掃描</button>
       <button id="btnScanStop"  type="button" class="btn btn-outline-secondary">停止</button>
 
-      <!-- 外部掃描器（載入時用 JS 動態組 ret= 當前網址） -->
-      <a id="extZX" class="btn btn-outline-secondary"   href="#">用外部掃描器</a>
+      <!-- 外部掃描器（使用你手機內的掃描 App；掃完會回到本頁 & ?barcode=...） -->
+      <a id="extZX" class="btn btn-outline-secondary" href="#">用外部掃描器</a>
       <a id="extIntent" class="btn btn-outline-secondary" href="#">用外部掃描器（Intent）</a>
 
       <button id="btnPhotoScan" type="button" class="btn btn-outline-secondary">拍照掃碼（備援）</button>
-
-      <!-- 手電筒 / 縮放（僅支援時顯示） -->
       <button id="btnTorch" type="button" class="btn btn-outline-dark d-none">手電筒</button>
       <input id="zoom" type="range" min="1" max="1" step="0.1" class="form-range d-none" style="max-width:220px">
-
-      <span id="scanMsg"  class="text-danger small ms-2"></span>
+      <span id="scanMsg" class="text-danger small ms-2"></span>
     </div>
-    <video id="video" playsinline muted style="width:100%;max-width:380px;margin-top:.5rem;border:1px solid #ddd;border-radius:6px"></video>
+    <video id="video" playsinline muted></video>
     <input id="fileScan" type="file" accept="image/*" capture="environment" class="d-none">
   </div>
 </div>
@@ -98,7 +94,7 @@
   </div>
 </form>
 
-<!-- 本地列表 -->
+<!-- 本地清單 -->
 <div class="table-responsive mt-3">
   <table id="matTable" class="table table-sm table-striped">
     <thead class="table-light">
@@ -111,7 +107,7 @@
   </table>
 </div>
 
-<!-- 查詢卡片 -->
+<!-- 線上查詢 -->
 <div class="card my-3">
   <div class="card-header">線上查詢（Google Sheet）</div>
   <div class="card-body">
@@ -171,8 +167,8 @@
 </div>
 
 <script>
-/* ===== 你的 GAS /exec 網址 ===== */
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwL_uYXm-COTwvazO8s6m8L4IG7jUg_J_mDpJZvIPgNw-oec2pnBUrcwCviviwhBUpG_g/exec';
+/* ===== 改成你的 GAS /exec 網址 ===== */
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzv7Hu7Rc_Ce9Dih4Igy8BsR8Sbmpt14vo_FDClQBxO_fbm9sg6aF6cK63eDiaH-Zkf7g/exec';
 
 /* ===== DOM ===== */
 const video    = document.getElementById('video');
@@ -191,7 +187,7 @@ const qBody    = document.querySelector('#qTable tbody');
 let data = [];
 let currentDeviceId = null;
 
-/* 頁面載入：處理外部掃描器回呼 ?barcode= */
+/* 進入頁面：處理外部掃描器回呼 ?barcode= */
 (() => {
   const u = new URL(location.href);
   const bc = u.searchParams.get('barcode');
@@ -200,7 +196,6 @@ let currentDeviceId = null;
     lookupByBarcode(bc);
     history.replaceState({}, '', location.pathname);
   }
-  // 外部掃描器連結動態組 ret 為目前頁面
   const ret = encodeURIComponent(`${location.origin}${location.pathname}?barcode={CODE}`);
   document.getElementById('extZX').href =
     `zxing://scan/?ret=${ret}&SCAN_FORMATS=EAN_13%2CEAN_8%2CUPC_A%2CCODE_128%2CITF&PROMPT_MESSAGE=%E8%AB%8B%E6%8E%83%E6%A2%9D%E7%A2%BC`;
@@ -208,7 +203,7 @@ let currentDeviceId = null;
     `intent://scan/#Intent;scheme=zxing;package=com.teacapps.barcodescanner;S.ret=${ret};S.SCAN_FORMATS=EAN_13%2CEAN_8%2CUPC_A%2CCODE_128%2CITF;end`;
 })();
 
-/* 條碼主檔帶入（去 GAS Products 查） */
+/* 條碼主檔帶入 */
 let lookupTimer = null;
 async function lookupByBarcode(barcode) {
   if (!barcode) return;
@@ -221,15 +216,16 @@ async function lookupByBarcode(barcode) {
       if (json && json.found) {
         if (json.row.code)  matCode.value = json.row.code;
         if (json.row.item)  matItem.value = json.row.item;
-        if (json.row.loc)   matLoc.value  = json.row.loc;
-        setScanMsg(`已帶入：${json.row.item}（料號 ${json.row.code}，儲位 ${json.row.loc||'-'}）`);
+        const loc = json.row.loc ?? json.row.default_loc ?? '';
+        if (loc) matLoc.value = loc;
+        setScanMsg(`已帶入：${json.row.item||''}（料號 ${json.row.code||''}，儲位 ${loc||'-'}）`);
       } else {
         setScanMsg('主檔無此條碼，請手動輸入品項/料號/儲位後送出。');
       }
     } catch (e) {
       setScanMsg('查詢主檔失敗：' + e);
     }
-  }, 150);
+  }, 120);
 }
 function setScanMsg(msg){ scanMsg.textContent = msg || ''; }
 function handleBarcode(bc){
@@ -265,7 +261,7 @@ const hints = new Map([
   [ZXing.DecodeHintType.TRY_HARDER, true],
   [ZXing.DecodeHintType.ASSUME_GS1, true]
 ]);
-const zxingReader = new ZXing.BrowserMultiFormatReader(hints, 500);
+const zxingReader = new ZXing.BrowserMultiFormatReader(hints, 300);
 
 const hasBD = 'BarcodeDetector' in window;
 let bd = null;
@@ -314,21 +310,18 @@ function startBDLoop(){
   detectorLoop = requestAnimationFrame(tick);
 }
 
-/* 掛上手電筒/縮放控制（裝置支援時顯示） */
+/* 啟動後才掛手電筒/縮放（有支援才顯示） */
 function bindTrackControls(track){
   currentTrack = track;
   const caps = track.getCapabilities ? track.getCapabilities() : {};
-
   if (caps.torch){
     btnTorch.classList.remove('d-none');
-    btnTorch.onclick = async ()=>{
+    btnTorch.onclick = async ()=> {
       torchOn = !torchOn;
-      try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch(e){}
+      try { await track.applyConstraints({ advanced: [{ torch: torchOn }] }); } catch{}
       btnTorch.classList.toggle('active', torchOn);
     };
-  } else {
-    btnTorch.classList.add('d-none');
-  }
+  } else { btnTorch.classList.add('d-none'); }
 
   if (caps.zoom){
     zoomEl.classList.remove('d-none');
@@ -339,9 +332,7 @@ function bindTrackControls(track){
     zoomEl.oninput = ()=> {
       track.applyConstraints({ advanced: [{ zoom: Number(zoomEl.value) }] }).catch(()=>{});
     };
-  } else {
-    zoomEl.classList.add('d-none');
-  }
+  } else { zoomEl.classList.add('d-none'); }
 }
 
 /* 啟停掃描 */
@@ -360,7 +351,7 @@ btnStart.addEventListener('click', async ()=>{
     const s = await navigator.mediaDevices.getUserMedia(constraints);
     video.srcObject = s;
     await video.play();
-    bindTrackControls(s.getVideoTracks()[0]);   // ★ 只在啟動成功後掛控制
+    bindTrackControls(s.getVideoTracks()[0]);
   }catch(e){ setScanMsg('相機啟動失敗：'+e); return; }
 
   let ok = true;
@@ -381,17 +372,12 @@ fileScan.addEventListener('change', async (e)=>{
   try{
     const r = await zxingReader.decodeFromImageUrl(url);
     handleBarcode(r.getText());
-  }catch(err){
-    setScanMsg('照片無法解碼，請換角度/距離/光線再試');
-  }
+  }catch{ setScanMsg('照片無法解碼，請換角度/距離/光線再試'); }
   URL.revokeObjectURL(url);
 });
 
 /* 條碼輸入手動觸發帶入 */
-document.getElementById('matBarcode').addEventListener('change', e=>{
-  lookupByBarcode(e.target.value.trim());
-});
-document.getElementById('matBarcode').addEventListener('input', e => {
+document.getElementById('matBarcode').addEventListener('input', e=>{
   lookupByBarcode(e.target.value.trim());
 });
 
@@ -403,6 +389,7 @@ document.getElementById('matForm').addEventListener('submit', async e=>{
   const code= matCode.value.trim();
   const it  = matItem.value.trim();
   const loc = matLoc.value.trim();
+  const exp = (matExp.value||'').trim();
   const qIn = parseFloat(matIn.value)||0;
   const qOut= parseFloat(matOut.value)||0;
 
@@ -418,84 +405,76 @@ document.getElementById('matForm').addEventListener('submit', async e=>{
     await fetch(GAS_URL, {
       method:'POST',
       headers:{'Content-Type':'text/plain;charset=utf-8'},
-      body: JSON.stringify({
-        date:d, barcode:bc, code, item:it, loc,
-        exp: (matExp.value || ''),
-        in:qIn, out:qOut
-      })
+      body: JSON.stringify({ date:d, barcode:bc, code, item:it, loc, exp, in:qIn, out:qOut })
     });
-  }catch(err){
-    console.warn('寫入 GAS 失敗：', err);
-  }
+  }catch(err){ console.warn('寫入 GAS 失敗：', err); }
 
   e.target.reset();
   matDate.value = new Date().toISOString().slice(0,10);
 });
+function renderLocal(){
+  tbody.innerHTML = '';
+  data.sort((a,b)=>a.date.localeCompare(b.date)).forEach(r=>{
+    tbody.insertAdjacentHTML('beforeend',
+      `<tr><td>${r.date}</td><td>${r.barcode||''}</td><td>${r.code||''}</td>
+           <td>${r.item||''}</td><td>${r.loc||''}</td>
+           <td>${r.in||0}</td><td>${r.out||0}</td><td>${r.stock||0}</td></tr>`);
+  });
+}
 
-/* 查詢 / 匯出 */
+/* 查詢 / 匯出 / 彙總 */
 document.getElementById('btnQuery').addEventListener('click', async ()=>{
   const qs = new URLSearchParams({
-    action: 'query',
-    from  : qFrom.value || '',
-    to    : qTo.value   || '',
-    code  : qCode.value || '',
-    item  : qItem.value || '',
-    loc   : qLoc.value  || ''
+    action:'query', from:qFrom.value||'', to:qTo.value||'',
+    code:qCode.value||'', item:qItem.value||'', loc:qLoc.value||''
   });
   try{
     const r = await fetch(`${GAS_URL}?${qs.toString()}`);
     const j = await r.json();
     qBody.innerHTML = '';
-    (j.rows || []).forEach(r=>{
+    (j.rows||[]).forEach(r=>{
       qBody.insertAdjacentHTML('beforeend', `<tr>
         <td>${r.date||''}</td><td>${r.barcode||''}</td><td>${r.code||''}</td>
         <td>${r.item||''}</td><td>${r.loc||''}</td>
         <td>${r.in||0}</td><td>${r.out||0}</td><td>${r.stock||0}</td><td>${r.ts||''}</td>
       </tr>`);
     });
-    if (!j.rows || !j.rows.length) qBody.innerHTML = `<tr><td colspan="9" class="text-muted">無資料</td></tr>`;
+    if (!j.rows?.length) qBody.innerHTML = `<tr><td colspan="9" class="text-muted">無資料</td></tr>`;
   }catch(e){
     qBody.innerHTML = `<tr><td colspan="9" class="text-danger">查詢失敗：${e}</td></tr>`;
   }
 });
 document.getElementById('btnQueryXlsx').addEventListener('click', ()=>{
-  const rows = [...qBody.querySelectorAll('tr')].map(tr=>
-    [...tr.children].map(td=>td.textContent));
+  const rows = [...qBody.querySelectorAll('tr')].map(tr=>[...tr.children].map(td=>td.textContent));
   const head = [...document.querySelectorAll('#qTable thead th')].map(th=>th.textContent);
   const ws = XLSX.utils.aoa_to_sheet([head, ...rows]);
   const wb = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(wb, ws, 'Query');
   XLSX.writeFile(wb, 'query.xlsx');
 });
-
-/* 彙總 */
 document.getElementById('btnSummary').addEventListener('click', async ()=>{
   const qs = new URLSearchParams({
-    action: 'summary',
-    from  : qFrom.value || '',
-    to    : qTo.value   || '',
-    code  : qCode.value || '',
-    item  : qItem.value || '',
-    loc   : qLoc.value  || ''
+    action:'summary', from:qFrom.value||'', to:qTo.value||'',
+    code:qCode.value||'', item:qItem.value||'', loc:qLoc.value||''
   });
   try{
     const r = await fetch(`${GAS_URL}?${qs.toString()}`);
     const j = await r.json();
     qBody.innerHTML = '';
-    (j.rows || []).forEach(r=>{
+    (j.rows||[]).forEach(r=>{
       qBody.insertAdjacentHTML('beforeend', `<tr>
         <td>${r.date||''}</td><td></td><td>${r.code||''}</td>
         <td>${r.item||''}</td><td>${r.loc||''}</td>
         <td>${r.in||0}</td><td>${r.out||0}</td><td>${r.stockEnd||0}</td><td></td>
       </tr>`);
     });
-    if (!j.rows || !j.rows.length) qBody.innerHTML = `<tr><td colspan="9" class="text-muted">無資料</td></tr>`;
+    if (!j.rows?.length) qBody.innerHTML = `<tr><td colspan="9" class="text-muted">無資料</td></tr>`;
   }catch(e){
     qBody.innerHTML = `<tr><td colspan="9" class="text-danger">彙總失敗：${e}</td></tr>`;
   }
 });
 
-/* 批次上傳（含 Excel 序號日期 45901 → YYYY-MM-DD） */
+/* 批次上傳（含 Excel 日期序號 → ISO） */
 function excelDateToISO(v){
   if (typeof v === 'number'){
     const d = XLSX.SSF.parse_date_code(v);
@@ -515,19 +494,17 @@ document.getElementById('btnBulk').addEventListener('click', async ()=>{
   const wb = XLSX.read(ab);
   const ws = wb.Sheets[wb.SheetNames[0]];
   const arr = XLSX.utils.sheet_to_json(ws, {defval:''});
-
   const rows = arr.map(o=>({
-    date:    excelDateToISO(o.date||o.日期||''),
-    code:    o.code||o.料號||'',
-    item:    o.item||o.品項||'',
-    loc:     o.loc||o.儲位||'',
-	exp:     excelDateToISO(o.exp || o.效期 || o.expiry || ''),
-    in:      Number(o.in||o.進料量||0),
-    out:     Number(o.out||o.領料量||0),
-    stock:   Number(o.stock||o.庫存量||0),
+    date: excelDateToISO(o.date||o.日期||''),
+    code: o.code||o.料號||'',
+    item: o.item||o.品項||'',
+    loc:  o.loc||o.儲位||'',
+    exp:  excelDateToISO(o.exp||o.效期||o.expiry||''),
+    in:   Number(o.in||o.進料量||0),
+    out:  Number(o.out||o.領料量||0),
+    stock:Number(o.stock||o.庫存量||0),
     barcode: o.barcode||o.條碼||''
   })).filter(r=>r.date && (r.in||r.out||r.stock||r.code||r.item));
-
   if(!rows.length){ alert('沒有可匯入的資料列'); return; }
 
   const chunk = 200;
@@ -538,7 +515,8 @@ document.getElementById('btnBulk').addEventListener('click', async ()=>{
       headers:{'Content-Type':'text/plain;charset=utf-8'},
       body: JSON.stringify({rows: part})
     });
-    document.getElementById('bulkMsg').textContent = `已上傳 ${Math.min(i+chunk, rows.length)} / ${rows.length}`;
+    document.getElementById('bulkMsg').textContent =
+      `已上傳 ${Math.min(i+chunk, rows.length)} / ${rows.length}`;
   }
   alert('批次入庫完成');
 });
@@ -570,12 +548,13 @@ document.getElementById('btnAlerts').addEventListener('click', async ()=>{
     });
     if (!j.lowStock?.length) lowBody.innerHTML = `<tr><td colspan="8" class="text-muted">無低庫存預警</td></tr>`;
   }catch(e){
-    document.getElementById('expBody').innerHTML = `<tr><td colspan="6" class="text-danger">預警查詢失敗：${e}</td></tr>`;
+    document.getElementById('expBody').innerHTML =
+      `<tr><td colspan="6" class="text-danger">預警查詢失敗：${e}</td></tr>`;
     document.getElementById('lowBody').innerHTML = '';
   }
 });
 
-/* 初始：日期 + 權限 + 鏡頭清單 */
+/* 初始 */
 (function(){
   const t = new Date().toISOString().slice(0,10);
   matDate.value = t; qFrom.value = t; qTo.value = t;
