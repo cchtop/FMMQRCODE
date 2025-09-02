@@ -123,8 +123,7 @@
       <button id="btnQuery" class="btn btn-outline-primary" type="button">查詢</button>
       <button id="btnQueryXlsx" class="btn btn-success" type="button">匯出查詢結果 Excel</button>
       <button id="btnSummary" class="btn btn-warning" type="button">彙總(同日×料號×品項×儲位)</button>
-      <button id="btnShipPdf" class="btn btn-danger" type="button">出貨單 PDF（由查詢結果產生）</button>
-    </div>
+     </div>
     <div class="table-responsive mt-2">
       <table id="qTable" class="table table-sm">
         <thead><tr>
@@ -167,9 +166,6 @@
     <tbody id="lowBody"></tbody>
   </table>
 </div>
-
-<!-- PDF 用容器（隱藏） -->
-<div id="printContainer" style="display:none"></div>
 
 <script>
 /*** 換成你自己的 GAS /exec ***/
@@ -455,22 +451,6 @@ document.getElementById('btnSummary').addEventListener('click', async ()=>{
     });
     if (!j.rows?.length) qBody.innerHTML = `<tr><td colspan="9" class="text-muted">無資料</td></tr>`;
   }catch(e){ qBody.innerHTML = `<tr><td colspan="9" class="text-danger">彙總失敗：${e}</td></tr>`; }
-});
-
-/*** 出貨單 PDF：用查詢結果中「領料量>0」的列產生 ***/
-document.getElementById('btnShipPdf').addEventListener('click', ()=>{
-  const rows=[...qBody.querySelectorAll('tr')].map(tr=>[...tr.children].map(td=>td.textContent));
-  const header=['日期','條碼','料號','品項','儲位','進料量','領料量','庫存量','寫入時間'];
-  const list = rows.filter(r=>Number(r[6]||0)>0);
-  if(!list.length){ alert('查詢結果沒有可出貨的資料（領料量>0）'); return; }
-  const div=document.getElementById('printContainer');
-  const title=`<div style="text-align:center;font-weight:700;font-size:18px;margin-bottom:8px">出貨單</div>`;
-  const tHead=`<thead><tr>${header.map(h=>`<th style="border:1px solid #000;padding:4px">${h}</th>`).join('')}</tr></thead>`;
-  const tBody=`<tbody>${list.map(r=>`<tr>${r.map(c=>`<td style="border:1px solid #000;padding:4px">${c||''}</td>`).join('')}</tr>`).join('')}</tbody>`;
-  div.innerHTML = `${title}<table style="border-collapse:collapse;width:100%">${tHead}${tBody}</table>`;
-  div.style.display='block';
-  html2pdf().from(div).set({margin:.3, filename:'出貨單.pdf', html2canvas:{scale:2}, jsPDF:{unit:'in',format:'a4'}})
-    .save().then(()=>{div.style.display='none';});
 });
 
 /*** 批次上傳（含 Excel 日期轉 ISO） ***/
