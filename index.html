@@ -17,6 +17,7 @@
 </style>
 </head>
 <body class="container">
+
 <!-- 掃碼 -->
 <div class="card mb-3">
   <div class="card-header">掃碼新增（條碼/QR）</div>
@@ -28,8 +29,11 @@
       </div>
       <button id="btnScanStart" class="btn btn-primary" type="button">啟動掃描</button>
       <button id="btnScanStop"  class="btn btn-outline-secondary" type="button">停止</button>
+
+      <!-- 外部掃描器（你手機的條碼 App） -->
       <a id="extZX"     class="btn btn-outline-secondary" href="#">用外部掃描器</a>
       <a id="extIntent" class="btn btn-outline-secondary" href="#">用外部掃描器（Intent）</a>
+
       <button id="btnPhotoScan" class="btn btn-outline-secondary" type="button">拍照掃碼（備援）</button>
       <button id="btnTorch" class="btn btn-outline-dark d-none" type="button">手電筒</button>
       <input id="zoom" type="range" min="1" max="1" step="0.1" class="form-range d-none" style="max-width:220px">
@@ -115,10 +119,11 @@
       <div class="col-6 col-md-2"><label class="form-label">品項含</label><input id="qItem" type="text" class="form-control"></div>
       <div class="col-6 col-md-2"><label class="form-label">儲位含</label><input id="qLoc"  type="text" class="form-control"></div>
     </div>
-    <div class="mt-2 d-flex gap-2">
+    <div class="mt-2 d-flex flex-wrap gap-2">
       <button id="btnQuery" class="btn btn-outline-primary" type="button">查詢</button>
       <button id="btnQueryXlsx" class="btn btn-success" type="button">匯出查詢結果 Excel</button>
       <button id="btnSummary" class="btn btn-warning" type="button">彙總(同日×料號×品項×儲位)</button>
+      <button id="btnShipPdf" class="btn btn-danger" type="button">出貨單 PDF（由查詢結果產生）</button>
     </div>
     <div class="table-responsive mt-2">
       <table id="qTable" class="table table-sm">
@@ -163,9 +168,12 @@
   </table>
 </div>
 
+<!-- PDF 用容器（隱藏） -->
+<div id="printContainer" style="display:none"></div>
+
 <script>
-/*** 改成你的 GAS /exec ***/
-const GAS_URL = 'https://script.google.com/macros/s/AKfycbwsWcwTd-Lw_o8y2B8i7zog4Xib9lp7LvrJqfeDre8dP79p2YH4A3zBnB7mBf3Occ4qPQ/exec';
+/*** 換成你自己的 GAS /exec ***/
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbwyObiJ2UcpTuwLLnGYqXBsFNXQtMStTNzr3wNb_nV4ejFfEtipZDx6LmrxCIO5vHm3Pg/exec';
 
 /*** DOM 快取 ***/
 const video    = document.getElementById('video');
@@ -185,7 +193,7 @@ const qBody    = document.querySelector('#qTable tbody');
 let data = [];
 let currentDeviceId = null;
 
-/*** 進入頁面：處理外部掃描器 ?barcode= 回呼並自動帶入主檔 ***/
+/*** 進來就處理外部掃描器回呼 ?barcode=xxx，自動帶入主檔 ***/
 (() => {
   const u = new URL(location.href);
   const bc = u.searchParams.get('barcode');
@@ -234,7 +242,7 @@ document.getElementById('matBarcode').addEventListener('input', e=>{
   lookupByBarcode(e.target.value.trim());
 });
 
-/*** 權限 + 列鏡頭 ***/
+/*** 權限 + 鏡頭列出 ***/
 async function ensureCamPermission(){
   try{
     const s = await navigator.mediaDevices.getUserMedia({video:true});
@@ -352,7 +360,7 @@ fileScan.addEventListener('change', async (e)=>{
   URL.revokeObjectURL(url);
 });
 
-/*** 表單送出：先本地更新，再發送後端並以回傳 on-hand 覆寫 ***/
+/*** 表單送出：先本地更新，再發到後端，由後端回傳 on-hand 覆寫 ***/
 document.getElementById('matForm').addEventListener('submit', async e=>{
   e.preventDefault();
   saveMsg.textContent = '';
@@ -366,7 +374,7 @@ document.getElementById('matForm').addEventListener('submit', async e=>{
   const qIn = parseFloat(matIn.value)||0;
   const qOut= parseFloat(matOut.value)||0;
 
-  // 先把畫面上的小表更新
+  // 畫面上的小表即時更新
   const stock = data.filter(r=>r.date===d && r.code===code && r.item===it && r.loc===loc)
                     .reduce((a,c)=>a+c.in-c.out,0) + qIn - qOut;
   const ex = data.find(r=>r.date===d && r.code===code && r.item===it && r.loc===loc);
@@ -381,11 +389,9 @@ document.getElementById('matForm').addEventListener('submit', async e=>{
     });
     const j = await r.json();
     if (j && j.ok){
-      // 後端可能補齊了品項/儲位/料號
       if (j.fill?.code) matCode.value = j.fill.code;
       if (j.fill?.item) matItem.value = j.fill.item;
       if (j.fill?.loc)  matLoc.value  = j.fill.loc;
-      // 用後端 onhand 覆寫本地最後一列
       const last = data.find(r=>r.date===d && r.code===(j.fill?.code||code) && r.item===(j.fill?.item||it) && r.loc===(j.fill?.loc||loc));
       if (last) last.stock = j.onhand;
       renderLocal();
@@ -451,7 +457,23 @@ document.getElementById('btnSummary').addEventListener('click', async ()=>{
   }catch(e){ qBody.innerHTML = `<tr><td colspan="9" class="text-danger">彙總失敗：${e}</td></tr>`; }
 });
 
-/*** 批次上傳（含 Excel 序號日期轉 ISO） ***/
+/*** 出貨單 PDF：用查詢結果中「領料量>0」的列產生 ***/
+document.getElementById('btnShipPdf').addEventListener('click', ()=>{
+  const rows=[...qBody.querySelectorAll('tr')].map(tr=>[...tr.children].map(td=>td.textContent));
+  const header=['日期','條碼','料號','品項','儲位','進料量','領料量','庫存量','寫入時間'];
+  const list = rows.filter(r=>Number(r[6]||0)>0);
+  if(!list.length){ alert('查詢結果沒有可出貨的資料（領料量>0）'); return; }
+  const div=document.getElementById('printContainer');
+  const title=`<div style="text-align:center;font-weight:700;font-size:18px;margin-bottom:8px">出貨單</div>`;
+  const tHead=`<thead><tr>${header.map(h=>`<th style="border:1px solid #000;padding:4px">${h}</th>`).join('')}</tr></thead>`;
+  const tBody=`<tbody>${list.map(r=>`<tr>${r.map(c=>`<td style="border:1px solid #000;padding:4px">${c||''}</td>`).join('')}</tr>`).join('')}</tbody>`;
+  div.innerHTML = `${title}<table style="border-collapse:collapse;width:100%">${tHead}${tBody}</table>`;
+  div.style.display='block';
+  html2pdf().from(div).set({margin:.3, filename:'出貨單.pdf', html2canvas:{scale:2}, jsPDF:{unit:'in',format:'a4'}})
+    .save().then(()=>{div.style.display='none';});
+});
+
+/*** 批次上傳（含 Excel 日期轉 ISO） ***/
 function excelDateToISO(v){
   if (typeof v === 'number'){
     const d = XLSX.SSF.parse_date_code(v);
