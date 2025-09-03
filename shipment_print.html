@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    body{font-family:Arial,"Noto Sans TC",sans-serif;font-size:12px}
+    table{border-collapse:collapse;width:100%}
+    th,td{border:1px solid #333;padding:6px;text-align:center}
+    .title{font-size:16px;font-weight:700;text-align:center;margin:6px 0 10px}
+    .meta td{text-align:left}
+  </style>
+</head>
+<body>
+  <div class="title">出貨單 - <?= data.ship_id ?></div>
+  <table class="meta">
+    <tr>
+      <td>出貨日期：<?= data.header.date ?></td>
+      <td>客戶：<?= data.header.vendor_name ?></td>
+      <td>聯絡人：<?= data.header.contact ?></td>
+    </tr>
+    <tr>
+      <td colspan="3">地址：<?= data.header.address ?>　電話：<?= data.header.phone ?></td>
+    </tr>
+  </table>
+  <br>
+  <table>
+    <thead>
+      <tr>
+        <th>序</th><th>條碼</th><th>料號</th><th>品項</th><th>規格</th>
+        <th>儲位</th><th>效期</th><th>出貨量</th><th>單價</th><th>金額</th>
+      </tr>
+    </thead>
+    <tbody>
+      <? var total=0; data.lines.forEach((ln,i)=>{ total+=Number(ln.amount||0); ?>
+      <tr>
+        <td><?= i+1 ?></td>
+        <td><?= ln.barcode ?></td>
+        <td><?= ln.code ?></td>
+        <td><?= ln.item ?></td>
+        <td><?= ln.spec ?></td>
+        <td><?= ln.loc ?></td>
+        <td><?= ln.exp ?></td>
+        <td><?= ln.qty_out ?></td>
+        <td><?= ln.unit_price ?></td>
+        <td><?= ln.amount ?></td>
+      </tr>
+      <? }) ?>
+      <tr>
+        <td colspan="9" style="text-align:right">合計</td>
+        <td><?= total ?></td>
+      </tr>
+    </tbody>
+  </table>
+  <p>備註：<?= data.header.note ?></p>
+</body>
+</html>
