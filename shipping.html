@@ -16,13 +16,11 @@
 <div class="container-fluid">
   <h3 class="mb-3">出貨管理</h3>
 
-  <!-- API URL -->
   <div class="alert alert-secondary py-2">
     <label class="form-label mb-1">API URL（Apps Script 部署網址）</label>
-    <input id="apiUrl" class="form-control" value="https://script.google.com/macros/s/AKfycbyYwUErg76WKesvXn3vrJT8M8rp7v2_JQU4B9rRCyAao0sYN5R3dKw_1dtaqkDjNT6shg/exec">
+    <input id="apiUrl" class="form-control">
   </div>
 
-  <!-- 供應商 / 表頭 -->
   <div class="card mb-3">
     <div class="card-header">出貨表頭</div>
     <div class="card-body row g-3">
@@ -56,7 +54,6 @@
     </div>
   </div>
 
-  <!-- 掃碼/找品 + 明細 -->
   <div class="card mb-3">
     <div class="card-header">新增明細</div>
     <div class="card-body row g-2 align-items-end">
@@ -84,7 +81,7 @@
         <button id="btnAdd" class="btn btn-primary">加入</button>
       </div>
       <div class="col-12">
-        <small class="text-muted">外部掃描器可用：安裝「條碼掃描器（TeaCapps）」後，直接在「條碼 / 料號」欄位點擊，掃描完會貼上內容。</small>
+        <small class="text-muted">外部掃描器可用：安裝「條碼掃描器（TeaCapps）」後，對「條碼/料號」欄位點擊，掃完會自動貼上。</small>
       </div>
     </div>
     <div class="table-responsive">
@@ -98,7 +95,6 @@
             <th style="width:100px">規格</th>
             <th style="width:80px">儲位</th>
             <th style="width:110px">效期</th>
-            <th style="width:90px">庫存</th>
             <th style="width:90px">出貨</th>
             <th style="width:100px">單價</th>
             <th style="width:110px">金額</th>
@@ -110,14 +106,12 @@
     </div>
   </div>
 
-  <!-- 動作 -->
   <div class="d-flex gap-2">
     <button class="btn btn-outline-secondary" id="btnSaveDraft">儲存草稿</button>
     <button class="btn btn-success" id="btnCommit">確定出貨（扣庫存 & 產生 PDF）</button>
     <div id="saveMsg" class="ms-2 align-self-center text-muted"></div>
   </div>
 
-  <!-- 最近出貨 -->
   <hr>
   <h5>最近出貨</h5>
   <div class="table-responsive">
@@ -130,101 +124,82 @@
 
 <script>
 const $ = s => document.querySelector(s);
-const api = () => ($('#apiUrl').value || '').trim();
-const state = { lines: [], ship_id: null, vendors: [], productsCache:{} };
+const state = { lines: [], ship_id:null, vendors:[], productsCache:{} };
+const api = () => ($('#apiUrl').value||'').trim();
 
-function todayStr(){
-  const d = new Date(); const z = n=>String(n).padStart(2,'0');
-  return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`;
-}
+function todayStr(){ const d=new Date(),z=n=>String(n).padStart(2,'0'); return `${d.getFullYear()}-${z(d.getMonth()+1)}-${z(d.getDate())}`; }
+async function GET(p){ const url = api() + '?' + new URLSearchParams(p); const r=await fetch(url); return r.json(); }
+async function POST(obj){ const r=await fetch(api(),{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(obj)}); return r.json(); }
 
-/* ------- API helpers ------- */
-async function GET(p){ const url = api() + '?' + new URLSearchParams(p); const r= await fetch(url); return r.json(); }
-async function POST(obj){ const r = await fetch(api(), {method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(obj)}); return r.json(); }
-
-/* ------- Init ------- */
 async function init(){
+  // 記住 API URL
+  $('#apiUrl').value = localStorage.getItem('apiUrl') || '';
+  $('#apiUrl').addEventListener('change', ()=> localStorage.setItem('apiUrl',$('#apiUrl').value));
   $('#shipDate').value = todayStr();
-  await loadVendors();
-  await loadRecents();
+
   $('#searchKey').addEventListener('keydown', e=>{ if(e.key==='Enter'){ lookupAndPrefill(); }});
   $('#btnAdd').onclick = addLine;
   $('#btnSaveDraft').onclick = saveDraft;
   $('#btnCommit').onclick = commitShipment;
   $('#btnNewVendor').onclick = async ()=>{
     const name = prompt('輸入新客戶/供應商名稱'); if(!name) return;
-    const v = await POST({action:'savevendor', vendor:{ name, contact:'', phone:'', address:'', note:'' }});
+    const v = await POST({action:'savevendor', vendor:{ name }});
     await loadVendors(v.vendor_id);
   };
+
+  await loadVendors();
+  await loadRecents();
 }
-async function loadVendors(selectId){
-  const list = await GET({action:'listvendors'});
-  state.vendors = list;
+async function loadVendors(selected){
+  const res = await GET({action:'listvendors'});
+  const list = res.rows || []; state.vendors = list;
   $('#vendorSel').innerHTML = `<option value="">（選擇/可空白）</option>` + list.map(v=>`<option value="${v.vendor_id}">${v.name}</option>`).join('');
-  if(selectId) $('#vendorSel').value = selectId;
+  if(selected) $('#vendorSel').value = selected;
   $('#vendorSel').onchange = ()=>{
     const v = state.vendors.find(x=>x.vendor_id===$('#vendorSel').value);
-    $('#contact').value = v?.contact||'';
-    $('#phone').value = v?.phone||'';
-    $('#address').value = v?.address||'';
+    $('#contact').value = v?.contact||''; $('#phone').value = v?.phone||''; $('#address').value = v?.address||'';
   };
 }
 async function loadRecents(){
-  const rows = await GET({action:'listshipments', from:'', to:'', status:''});
-  const last10 = rows.slice(-10).reverse();
-  $('#recents').innerHTML = last10.map(r=>`
+  const res = await GET({action:'listshipments'});
+  const rows = (res.rows||[]).slice(-10).reverse();
+  $('#recents').innerHTML = rows.map(r=>`
     <tr>
       <td class="mono">${r.ship_id}</td>
       <td>${r.date}</td>
       <td>${r.vendor_name||''}</td>
       <td>${r.status}</td>
-      <td>${r.pdf_url ? `<a href="${r.pdf_url}" target="_blank">PDF</a>`:''}</td>
+      <td>${r.pdf_url?`<a target="_blank" href="${r.pdf_url}">PDF</a>`:''}</td>
     </tr>`).join('');
 }
 
-/* ------- Product lookup ------- */
 async function lookupAndPrefill(){
-  const key = $('#searchKey').value.trim();
-  if(!key) return;
-  const found = await GET({action:'products', q:key});
-  if(!found.length){ alert('找不到商品'); return; }
-  const p = found[0]; // 取第一筆
+  const key = $('#searchKey').value.trim(); if(!key){ return; }
+  const res = await GET({action:'products', q:key});
+  const list = res.rows || [];
+  if(!list.length){ alert('找不到商品'); return; }
+  const p = list[0];
   state.productsCache[p.code] = p;
   $('#lineLoc').value = p.default_loc || '';
-  // 查庫存
-  const s = await GET({action:'stock', code:p.code, loc:$('#lineLoc').value});
-  addPreviewRow(p, s.stock);
+  // 暫存在 btnAdd 的 dataset，按「加入」才真正放入明細
+  $('#btnAdd').dataset.barcode = p.barcode||'';
+  $('#btnAdd').dataset.code = p.code||'';
+  $('#btnAdd').dataset.item = p.item||'';
+  $('#btnAdd').dataset.spec = p.spec||'';
 }
-function addPreviewRow(p, stock){
-  // 先把預覽加入輸入區（實際加入明細要再按「加入」）
-  $('#btnAdd').dataset.code = p.code;
-  $('#btnAdd').dataset.barcode = p.barcode || '';
-  $('#btnAdd').dataset.item = p.item || '';
-  $('#btnAdd').dataset.spec = p.spec || '';
-  $('#btnAdd').dataset.stock = stock || 0;
-}
-
-/* ------- 明細 ------- */
 function addLine(){
-  const code = this.dataset.code;
-  if(!code){ alert('請先輸入條碼/料號並按 Enter'); return; }
-  const line = {
-    barcode: this.dataset.barcode || '',
-    code,
-    item: this.dataset.item || '',
-    spec: this.dataset.spec || '',
-    loc: $('#lineLoc').value || '',
-    exp: $('#lineExp').value || '',
-    qty_out: Number($('#lineQty').value||0),
-    unit_price: Number($('#linePrice').value||0),
-    amount: 0
+  const code = this.dataset.code; if(!code){ alert('請先輸入條碼/料號並按 Enter'); return; }
+  const ln = {
+    barcode: this.dataset.barcode||'',
+    code, item: this.dataset.item||'', spec:this.dataset.spec||'',
+    loc: $('#lineLoc').value||'', exp: $('#lineExp').value||'',
+    qty_out: Number($('#lineQty').value||0), unit_price:Number($('#linePrice').value||0)
   };
-  line.amount = line.qty_out * line.unit_price;
-  state.lines.push(line);
-  renderLines();
-  // 清輸入
-  $('#searchKey').value = ''; $('#lineExp').value = ''; $('#lineQty').value = 1; $('#linePrice').value = 0;
-  this.dataset.code = '';
+  ln.amount = ln.qty_out * ln.unit_price;
+  state.lines.push(ln); renderLines();
+  // 清空輸入＆dataset
+  $('#searchKey').value=''; $('#lineLoc').value=''; $('#lineExp').value=''; $('#lineQty').value=1; $('#linePrice').value=0;
+  this.dataset.code=''; this.dataset.barcode=''; this.dataset.item=''; this.dataset.spec='';
 }
 function renderLines(){
   $('#lineBody').innerHTML = state.lines.map((ln,i)=>`
@@ -232,11 +207,10 @@ function renderLines(){
       <td>${i+1}</td>
       <td class="mono">${ln.barcode||''}</td>
       <td class="mono">${ln.code}</td>
-      <td>${ln.item}</td>
+      <td>${ln.item||''}</td>
       <td>${ln.spec||''}</td>
       <td>${ln.loc||''}</td>
       <td>${ln.exp||''}</td>
-      <td class="mono"></td>
       <td class="mono">${ln.qty_out}</td>
       <td class="mono">${ln.unit_price}</td>
       <td class="mono">${ln.amount}</td>
@@ -245,33 +219,22 @@ function renderLines(){
 }
 function delLine(i){ state.lines.splice(i,1); renderLines(); }
 
-/* ------- 儲存/出貨 ------- */
-function buildHeader(){
+function header(){
   const v = state.vendors.find(x=>x.vendor_id===$('#vendorSel').value);
-  return {
-    date: $('#shipDate').value || todayStr(),
-    vendor_id: v?.vendor_id || '',
-    vendor_name: v?.name || '',
-    contact: $('#contact').value,
-    phone: $('#phone').value,
-    address: $('#address').value,
-    note: $('#note').value
-  };
+  return { date: $('#shipDate').value||todayStr(), vendor_id:v?.vendor_id||'', vendor_name:v?.name||'',
+           contact:$('#contact').value, phone:$('#phone').value, address:$('#address').value, note:$('#note').value };
 }
 async function saveDraft(){
   if(!state.lines.length){ alert('請先加入至少一筆明細'); return; }
-  const res = await POST({action:'createshipment', header:buildHeader(), lines: state.lines});
+  const res = await POST({action:'createshipment', header:header(), lines:state.lines});
   if(res.ok){ state.ship_id = res.ship_id; $('#saveMsg').innerText = `草稿已儲存：${res.ship_id}`; await loadRecents(); }
-  else alert(JSON.stringify(res));
+  else alert(res.error||'儲存失敗');
 }
 async function commitShipment(){
   if(!state.ship_id){ await saveDraft(); if(!state.ship_id) return; }
-  const res = await POST({action:'commitshipment', ship_id: state.ship_id});
-  if(res.ok){
-    alert('出貨已確認、庫存已扣。\nPDF：' + res.pdf_url);
-    state.ship_id = null; state.lines = []; renderLines(); $('#saveMsg').innerText='';
-    await loadRecents();
-  } else alert(JSON.stringify(res));
+  const res = await POST({action:'commitshipment', ship_id:state.ship_id});
+  if(res.ok){ alert('出貨完成，庫存已扣。\nPDF：'+res.pdf_url); state.ship_id=null; state.lines=[]; renderLines(); $('#saveMsg').innerText=''; await loadRecents(); }
+  else alert(res.error||'出貨失敗');
 }
 
 init();
